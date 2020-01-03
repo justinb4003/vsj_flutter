@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:web_socket_channel/io.dart';
 import 'json_models/player_hand.dart';
 import 'json_models/game_status.dart';
+import 'json_models/message_winner.dart';
 import 'vsj_data.dart';
 
 class GamePlay extends StatefulWidget {
@@ -13,8 +14,12 @@ class GamePlay extends StatefulWidget {
 class _GamePlayState extends State<GamePlay> {
   Future<PlayerHand> _playerHand;
   Future<GameStatus> _gameStatus;
+  final _snackbarTooMany = SnackBar(content: Text('Too many selections...'));
+  final _snackbarTooFew = SnackBar(content: Text('Not enough selections...'));
+  MessageWinner _lastWinnerMessage;
   bool _isDecider = false;
   bool _isSubmitted = false;
+  int _pickCount;
   List<String> _responseCardUuidList = List<String>();
 
   @override
@@ -26,12 +31,22 @@ class _GamePlayState extends State<GamePlay> {
   void asyncInitState() async {
     _playerHand = getPlayerHand();
     _gameStatus = getGameStatus();
-    final channel = await IOWebSocketChannel.connect(
+    // TODO: Reconnect websocket if something happens.
+    final channel = IOWebSocketChannel.connect(
         "ws://192.168.1.128:5000/monitor/${VSGData.gameUuid}/${VSGData.playerUuid}");
     channel.stream.listen((message) {
-      // mesage == 'update_game_status'
-      //debugPrint("Received $message");
-      _refreshGameStatus();
+      debugPrint("Websocket got message: $message");
+      if (message == 'update_game_status') {
+        _refreshGameStatus();
+      } else {
+        // Must be a 'winner' JSON message.
+        // Yes, much more control is needed over this. Learning pains.
+        final parsed = json.decode(message);
+        setState(() {
+          _lastWinnerMessage = MessageWinner.fromJson((parsed));
+          _alertWinnerDialog(context);
+        });
+      }
     });
   }
 
@@ -39,7 +54,6 @@ class _GamePlayState extends State<GamePlay> {
     PlayerHand playerHand = new PlayerHand();
     String url = '/get/hand/${VSGData.gameUuid}/${VSGData.playerUuid}';
     var resp = await VSGData.getVSJUrl(url);
-    debugPrint(resp.body);
     final parsed = json.decode(resp.body);
     playerHand = PlayerHand.fromJson(parsed);
     return playerHand;
@@ -55,6 +69,7 @@ class _GamePlayState extends State<GamePlay> {
     setState(() {
       _isDecider = gameStatus.deciderUuid == VSGData.playerUuid;
       _isSubmitted = true;
+      _pickCount = gameStatus.promptCard.pick;
       for (var p in gameStatus.waitingOn) {
         if (p.playerUuid == VSGData.playerUuid) {
           _isSubmitted = false;
@@ -86,7 +101,8 @@ class _GamePlayState extends State<GamePlay> {
   }
 
   Widget buildLookupCode(BuildContext context, GameStatus gs) {
-    if (false) {
+    bool debug = false;
+    if (debug == false) {
       return Text("Use code ${VSGData.gameLookupCode} to join");
     } else {
       return Column(children: <Widget>[
@@ -136,17 +152,27 @@ class _GamePlayState extends State<GamePlay> {
   Widget buildPromptCardDisplay(BuildContext context, GameStatus gs) {
     return Padding(
         padding: EdgeInsets.all(10),
-        child: RichText(
-            textAlign: TextAlign.center,
-            text: TextSpan(
-                text: gs.promptCard.text,
-                style: TextStyle(
-                    color: Colors.black,
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold))));
+        child: Column(children: <Widget>[
+          RichText(
+              textAlign: TextAlign.center,
+              text: TextSpan(
+                  text: gs.promptCard.text,
+                  style: TextStyle(
+                      color: Colors.black,
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold))),
+          RichText(
+              textAlign: TextAlign.center,
+              text: TextSpan(
+                  text: "Pick $_pickCount",
+                  style: TextStyle(
+                      color: Colors.black,
+                      fontSize: 16,
+                      fontWeight: FontWeight.normal))),
+        ]));
   }
 
-  void _selectWinner(List<Cards> cards) async {
+  Future<int> _selectWinner(List<Cards> cards) async {
     Map<String, dynamic> jsonData = new Map<String, dynamic>();
     List<String> cardUuids = List<String>();
     for (final c in cards) {
@@ -157,6 +183,7 @@ class _GamePlayState extends State<GamePlay> {
     var resp = await VSGData.postVSJUrl(
         '/selectwinner/${VSGData.gameUuid}/${VSGData.playerUuid}',
         json.encode(jsonData));
+    return resp.statusCode;
   }
 
   Future<int> _submitResponse(List<String> uuids) async {
@@ -169,6 +196,23 @@ class _GamePlayState extends State<GamePlay> {
     return resp.statusCode;
   }
 
+  String buildPromptResponseCombined(String origText, var cards) {
+    String finalText = origText;
+    if (finalText.contains("_")) {
+      for (final c in cards) {
+        // debugPrint(finalText);
+        finalText = finalText.replaceFirst("_", c.text);
+      }
+    } else {
+      // We have a prompt card without blanks.  Just display the text at the end.
+      for (final c in cards) {
+        // debugPrint(finalText);
+        finalText = "$finalText ${c.text}";
+      }
+    }
+    return finalText;
+  }
+
   Widget buildSelectWinner(BuildContext context, GameStatus gs) {
     List<Widget> playerList = List<Widget>();
     PromptCard pc = gs.promptCard;
@@ -177,19 +221,7 @@ class _GamePlayState extends State<GamePlay> {
     } else {
       for (final p in gs.submissions.players) {
         // debugPrint(p.playerName);
-        String finalText = pc.text;
-        if (finalText.contains("_")) {
-          for (final c in p.cards) {
-            // debugPrint(finalText);
-            finalText = finalText.replaceFirst("_", c.text);
-          }
-        } else {
-          // We have a prompt card without blanks.  Just display the text at the end.
-          for (final c in p.cards) {
-            // debugPrint(finalText);
-            finalText = "$finalText ${c.text}";
-          }
-        }
+        String finalText = buildPromptResponseCombined(pc.text, p.cards);
         // Clear up duplicated puncutation
         // finalText = finalText.replaceAll("..", ".");
         Widget w = Card(
@@ -236,12 +268,17 @@ class _GamePlayState extends State<GamePlay> {
         children: List<Widget>.from(ph.cardlist.map((pc) => Card(
                 child: ListTile(
               onTap: () {
-                debugPrint(pc.cardUuid);
+                Scaffold.of(context).hideCurrentSnackBar();
                 setState(() {
                   if (_responseCardUuidList.contains(pc.cardUuid)) {
                     _responseCardUuidList.remove(pc.cardUuid);
                   } else {
                     _responseCardUuidList.add(pc.cardUuid);
+                  }
+
+                  if (_responseCardUuidList.length > _pickCount) {
+                    _alertTooManySelections(context);
+                    _responseCardUuidList.removeLast();
                   }
                 });
               },
@@ -279,6 +316,68 @@ class _GamePlayState extends State<GamePlay> {
     }
   }
 
+  void _alertWinnerDialog(BuildContext context) async {
+    // Set up some text to display
+    GameStatus gs = await _gameStatus;
+    var winnerUuid = _lastWinnerMessage.winnerUuid;
+    var winnerName = 'Error';
+    var winnerPhrase = 'Error';
+    for (var p in gs.playerList) {
+      if (p.playerUuid == winnerUuid) {
+        winnerName = p.playerName;
+        winnerPhrase = buildPromptResponseCombined(
+            _lastWinnerMessage.promptCard.text, _lastWinnerMessage.cardlist);
+      }
+    }
+    debugPrint("$winnerName won");
+    debugPrint("$winnerPhrase");
+
+    showDialog<String>(
+      context: context,
+      barrierDismissible:
+          false, // dialog is dismissible with a tap on the barrier
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('$winnerName wins!'),
+          content: Text(winnerPhrase),
+          actions: <Widget>[
+            FlatButton(
+              child: Text('Ok'),
+              onPressed: () {
+                Navigator.pop(context);
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _alertTooManySelections(BuildContext context) async {
+    Scaffold.of(context).showSnackBar(_snackbarTooMany);
+    /*
+    showDialog<String>(
+      context: context,
+      barrierDismissible:
+          false, // dialog is dismissible with a tap on the barrier
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('Too many selections'),
+          content: Text(''),
+          actions: <Widget>[
+            FlatButton(
+              child: Text('Ok'),
+              onPressed: () {
+                Navigator.pop(context);
+              },
+            ),
+          ],
+        );
+      },
+    );
+    */
+  }
+
   Widget buildPlayerSubmitContainer(BuildContext context) {
     if (_isDecider || _isSubmitted) {
       return SizedBox(height: 10);
@@ -300,14 +399,20 @@ class _GamePlayState extends State<GamePlay> {
             RaisedButton(
                 onPressed: () async {
                   debugPrint("Submit responses");
-                  int respCode = await _submitResponse(_responseCardUuidList);
-                  if (respCode != 200) {
-                    debugPrint("Error submitting responses: $respCode");
+                  if (_responseCardUuidList.length < _pickCount) {
+                    Scaffold.of(context).showSnackBar(_snackbarTooFew);
+                  } else if (_responseCardUuidList.length > _pickCount) {
+                    Scaffold.of(context).showSnackBar(_snackbarTooMany);
+                  } else {
+                    int respCode = await _submitResponse(_responseCardUuidList);
+                    if (respCode != 200) {
+                      debugPrint("Error submitting responses: $respCode");
+                    }
+                    setState(() {
+                      _responseCardUuidList.clear();
+                      _refreshPlayerHand();
+                    });
                   }
-                  setState(() {
-                    _responseCardUuidList.clear();
-                    _refreshPlayerHand();
-                  });
                 },
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16.0)),
@@ -336,8 +441,12 @@ class _GamePlayState extends State<GamePlay> {
                 }
               },
             ),
-            buildPlayerHandContainer(context, _isDecider),
-            buildPlayerSubmitContainer(context),
+            Builder(builder: (context) { 
+              return buildPlayerHandContainer(context, _isDecider);
+            }),
+            Builder(builder: (context) {
+              return buildPlayerSubmitContainer(context);
+            }),
           ],
         ),
       ),
