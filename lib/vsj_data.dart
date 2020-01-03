@@ -1,11 +1,13 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 class VSGData {
-  static String game_uuid;
-  static String game_lookup_code;
+  static String gameUuid;
+  static String playerUuid;
+  static String playerName;
+  static String gameLookupCode;
   static String _serverUrl = "http://192.168.1.128:5000";
-
 
   static Future<http.Response> getVSJUrl(String url) async {
     String fullUrl = VSGData._serverUrl + url;
@@ -13,4 +15,10 @@ class VSGData {
     return http.get(fullUrl);
   }
 
+  static Future<http.Response> postVSJUrl(String url, dynamic body) async {
+    String fullUrl = VSGData._serverUrl + url;
+    return http.post(fullUrl,
+        headers: {HttpHeaders.contentTypeHeader: "application/json"},
+        body: body);
+  }
 }

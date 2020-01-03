@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'vsj_data.dart';
 import 'game_play.dart';
-import 'json_models/game_lookup.dart';
 import 'json_models/game_new.dart';
+import 'json_models/player_join.dart';
 
 void main() => runApp(VSGApp());
 
@@ -14,15 +14,6 @@ class VSGApp extends StatelessWidget {
     return MaterialApp(
       title: 'Flutter Demo',
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // Try running your application with "flutter run". You'll see the
-        // application has a blue toolbar. Then, without quitting the app, try
-        // changing the primarySwatch below to Colors.green and then invoke
-        // "hot reload" (press "r" in the console where you ran "flutter run",
-        // or simply save your changes to "hot reload" in a Flutter IDE).
-        // Notice that the counter didn't reset back to zero; the application
-        // is not restarted.
         primarySwatch: Colors.teal,
       ),
       home: VSGHomePage(title: 'VSJ / Cards Against Humanity'),
@@ -39,26 +30,59 @@ class VSGHomePage extends StatefulWidget {
 }
 
 class _VSGHomePageState extends State<VSGHomePage> {
-  int _counter = 0;
+  TextEditingController _playerNameController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _playerNameController.addListener(_playerNameChange);
+  }
+
+  void _playerNameChange() {
+    VSGData.playerName = _playerNameController.text;
+    debugPrint("Player now known as ${VSGData.playerName}");
+  }
 
   void _createNewGame(BuildContext context) async {
     String url = '/creategame';
     var resp = await VSGData.getVSJUrl(url);
     final parsed = json.decode(resp.body);
     GameNew gamenew = GameNew.fromJson(parsed);
-    VSGData.game_uuid = gamenew.gameUuid;
-    VSGData.game_lookup_code = gamenew.lookupCode;
+    VSGData.gameUuid = gamenew.gameUuid;
+    VSGData.gameLookupCode = gamenew.lookupCode;
     debugPrint("${gamenew.gameUuid}");
     debugPrint("${gamenew.lookupCode}");
     _joinGame(context);
   }
 
-  void _joinGame(BuildContext context) {
+  void _joinGame(BuildContext context) async {
+    // TODO: Needs to handle lookup code and getting the game uuid
+
+    String url = '/addplayer/${VSGData.gameUuid}/${VSGData.playerName}';
+    var resp = await VSGData.getVSJUrl(url);
+    final parsed = json.decode(resp.body);
+    PlayerJoin playerJoin = PlayerJoin.fromJson(parsed);
+    VSGData.playerUuid = playerJoin.playerUuid;
     Navigator.push(context, MaterialPageRoute(builder: (context) => GamePlay()));
+  }
+
+  Widget buildPlayerNameEntry(BuildContext context) {
+    return Column(children: <Widget>[
+      TextField(
+        controller: _playerNameController,
+        decoration: InputDecoration(labelText: 'Identify yourself'),
+        enabled: true,
+        style: Theme.of(context).textTheme.display1,
+        textAlign: TextAlign.center),
+
+    ]
+    );
+
   }
 
   @override
   Widget build(BuildContext context) {
+    Widget playerNameEntry = buildPlayerNameEntry(context);
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.title),
@@ -67,6 +91,9 @@ class _VSGHomePageState extends State<VSGHomePage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
+            Text("Yes, I know the interface is lacking."),
+            playerNameEntry,
+            SizedBox(height: 20),
             RaisedButton(
                 onPressed: () {
                   debugPrint("Create new game");
@@ -75,6 +102,7 @@ class _VSGHomePageState extends State<VSGHomePage> {
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16.0)),
                 child: Text('Create new game')),
+            SizedBox(height: 20),
             RaisedButton(
                 onPressed: () {
                   debugPrint("Join game");
