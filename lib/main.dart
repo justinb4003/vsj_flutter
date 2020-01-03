@@ -1,11 +1,19 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'vsj_data.dart';
 import 'game_play.dart';
 import 'json_models/game_new.dart';
 import 'json_models/player_join.dart';
 
-void main() => runApp(VSGApp());
+//void main() => runApp(VSGApp());
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await VSGData.loadPrefs();
+  VSGApp app = VSGApp();
+  runApp(app);
+}
 
 class VSGApp extends StatelessWidget {
   // This widget is the root of your application.
@@ -38,8 +46,10 @@ class _VSGHomePageState extends State<VSGHomePage> {
     _playerNameController.addListener(_playerNameChange);
   }
 
-  void _playerNameChange() {
+  void _playerNameChange() async {
     VSGData.playerName = _playerNameController.text;
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    prefs.setString('playerName', VSGData.playerName);
     debugPrint("Player now known as ${VSGData.playerName}");
   }
 
@@ -55,29 +65,69 @@ class _VSGHomePageState extends State<VSGHomePage> {
     _joinGame(context);
   }
 
-  void _joinGame(BuildContext context) async {
-    // TODO: Needs to handle lookup code and getting the game uuid
+  Future<String> _getLookupCode(BuildContext context, String lookupCode) async {
+    String url = '/lookupgame/$lookupCode';
+    var resp = await VSGData.getVSJUrl(url);
+    final parsed = json.decode(resp.body);
+    String uuid = parsed['game_uuid'];
+    // debugPrint(uuid);
+    return uuid;
+  }
 
+  void _joinGame(BuildContext context) async {
     String url = '/addplayer/${VSGData.gameUuid}/${VSGData.playerName}';
     var resp = await VSGData.getVSJUrl(url);
     final parsed = json.decode(resp.body);
     PlayerJoin playerJoin = PlayerJoin.fromJson(parsed);
     VSGData.playerUuid = playerJoin.playerUuid;
-    Navigator.push(context, MaterialPageRoute(builder: (context) => GamePlay()));
+    Navigator.push(
+        context, MaterialPageRoute(builder: (context) => GamePlay()));
+  }
+
+  Future<String> _asyncInputLookupCode(BuildContext context) async {
+    String lookupCode = '';
+    return showDialog<String>(
+      context: context,
+      barrierDismissible:
+          false, // dialog is dismissible with a tap on the barrier
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('Enter game code'),
+          content: new Row(
+            children: <Widget>[
+              new Expanded(
+                  child: new TextField(
+                autofocus: true,
+                decoration: new InputDecoration(
+                    labelText: 'Game code'),
+                onChanged: (value) {
+                  lookupCode = value;
+                },
+              ))
+            ],
+          ),
+          actions: <Widget>[
+            FlatButton(
+              child: Text('Ok'),
+              onPressed: () {
+                Navigator.of(context).pop(lookupCode);
+              },
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Widget buildPlayerNameEntry(BuildContext context) {
     return Column(children: <Widget>[
       TextField(
-        controller: _playerNameController,
-        decoration: InputDecoration(labelText: 'Identify yourself'),
-        enabled: true,
-        style: Theme.of(context).textTheme.display1,
-        textAlign: TextAlign.center),
-
-    ]
-    );
-
+          controller: _playerNameController,
+          decoration: InputDecoration(labelText: 'Your name'),
+          enabled: true,
+          style: Theme.of(context).textTheme.display1,
+          textAlign: TextAlign.center),
+    ]);
   }
 
   @override
@@ -91,7 +141,6 @@ class _VSGHomePageState extends State<VSGHomePage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
-            Text("Yes, I know the interface is lacking."),
             playerNameEntry,
             SizedBox(height: 20),
             RaisedButton(
@@ -104,8 +153,14 @@ class _VSGHomePageState extends State<VSGHomePage> {
                 child: Text('Create new game')),
             SizedBox(height: 20),
             RaisedButton(
-                onPressed: () {
-                  debugPrint("Join game");
+                onPressed: () async {
+                  final String lookupCode = await _asyncInputLookupCode(context);
+                  VSGData.gameLookupCode = lookupCode;
+                  debugPrint("Join game $lookupCode");
+                  String gameUuid = await _getLookupCode(context, lookupCode);
+                  debugPrint("Join game with UUID $gameUuid");
+                  VSGData.gameUuid = gameUuid;
+                  _joinGame(context);
                 },
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16.0)),

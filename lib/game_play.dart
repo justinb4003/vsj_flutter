@@ -14,6 +14,7 @@ class _GamePlayState extends State<GamePlay> {
   Future<PlayerHand> _playerHand;
   Future<GameStatus> _gameStatus;
   bool _isDecider = false;
+  bool _isSubmitted = false;
   List<String> _responseCardUuidList = List<String>();
 
   @override
@@ -28,7 +29,8 @@ class _GamePlayState extends State<GamePlay> {
     final channel = await IOWebSocketChannel.connect(
         "ws://192.168.1.128:5000/monitor/${VSGData.gameUuid}/${VSGData.playerUuid}");
     channel.stream.listen((message) {
-      debugPrint("Received $message");
+      // mesage == 'update_game_status'
+      //debugPrint("Received $message");
       _refreshGameStatus();
     });
   }
@@ -37,6 +39,7 @@ class _GamePlayState extends State<GamePlay> {
     PlayerHand playerHand = new PlayerHand();
     String url = '/get/hand/${VSGData.gameUuid}/${VSGData.playerUuid}';
     var resp = await VSGData.getVSJUrl(url);
+    debugPrint(resp.body);
     final parsed = json.decode(resp.body);
     playerHand = PlayerHand.fromJson(parsed);
     return playerHand;
@@ -51,7 +54,13 @@ class _GamePlayState extends State<GamePlay> {
     // Every time we rebuild the game status are redo the low so we can toggle decider status on/off
     setState(() {
       _isDecider = gameStatus.deciderUuid == VSGData.playerUuid;
-      debugPrint("New value of isDecider $_isDecider");
+      _isSubmitted = true;
+      for (var p in gameStatus.waitingOn) {
+        if (p.playerUuid == VSGData.playerUuid) {
+          _isSubmitted = false;
+        }
+      }
+      // debugPrint("New value of isDecider $_isDecider");
     });
     return gameStatus;
   }
@@ -69,14 +78,23 @@ class _GamePlayState extends State<GamePlay> {
   }
 
   Future<GameStatus> _refreshGameStatus() async {
+    Future gs = getGameStatus();
     setState(() {
-      _gameStatus = getGameStatus();
+      _gameStatus = gs;
     });
     return _gameStatus;
   }
 
   Widget buildLookupCode(BuildContext context, GameStatus gs) {
-    return Text("Use code ${VSGData.gameLookupCode} to join");
+    if (false) {
+      return Text("Use code ${VSGData.gameLookupCode} to join");
+    } else {
+      return Column(children: <Widget>[
+        Text("Use code ${VSGData.gameLookupCode} to join"),
+        Text("Player uuid ${VSGData.playerUuid}"),
+        Text("Game uuid ${VSGData.gameUuid}")
+      ]);
+    }
   }
 
   Widget buildPlayerList(BuildContext context, GameStatus gs) {
@@ -116,7 +134,16 @@ class _GamePlayState extends State<GamePlay> {
   }
 
   Widget buildPromptCardDisplay(BuildContext context, GameStatus gs) {
-    return Text(gs.promptCard.text);
+    return Padding(
+        padding: EdgeInsets.all(10),
+        child: RichText(
+            textAlign: TextAlign.center,
+            text: TextSpan(
+                text: gs.promptCard.text,
+                style: TextStyle(
+                    color: Colors.black,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold))));
   }
 
   void _selectWinner(List<Cards> cards) async {
@@ -132,20 +159,21 @@ class _GamePlayState extends State<GamePlay> {
         json.encode(jsonData));
   }
 
-  void _submitResponse(List<String> uuids) async {
+  Future<int> _submitResponse(List<String> uuids) async {
     Map<String, dynamic> jsonData = new Map<String, dynamic>();
     jsonData['cardlist'] = uuids;
     debugPrint(json.encode(jsonData));
     var resp = await VSGData.postVSJUrl(
         '/submitcards/${VSGData.gameUuid}/${VSGData.playerUuid}',
         json.encode(jsonData));
+    return resp.statusCode;
   }
 
   Widget buildSelectWinner(BuildContext context, GameStatus gs) {
     List<Widget> playerList = List<Widget>();
     PromptCard pc = gs.promptCard;
     if (gs.waitingOn.length > 0) {
-      return CircularProgressIndicator();
+      return LinearProgressIndicator();
     } else {
       for (final p in gs.submissions.players) {
         // debugPrint(p.playerName);
@@ -169,7 +197,10 @@ class _GamePlayState extends State<GamePlay> {
           ListTile(
               onTap: () {
                 debugPrint("selected winner ${p.playerName}");
-                _selectWinner(p.cards);
+                // The server should prevent this, but... for now I'm stopping it here but not disabling the tap.
+                if (gs.deciderUuid == VSGData.playerUuid) {
+                  _selectWinner(p.cards);
+                }
               },
               contentPadding: EdgeInsets.all(10),
               leading: Icon(Icons.person),
@@ -185,7 +216,6 @@ class _GamePlayState extends State<GamePlay> {
       return Column(
         children: playerList.toList(),
       );
-
     }
   }
 
@@ -233,7 +263,14 @@ class _GamePlayState extends State<GamePlay> {
         future: _playerHand,
         builder: (context, snap) {
           if (snap.hasData == true) {
-            return buildPlayerHand(context, snap.data);
+            if (_isSubmitted) {
+              return Column(children: <Widget>[
+                LinearProgressIndicator(),
+                Text('Waiting for decision...')
+              ]);
+            } else {
+              return buildPlayerHand(context, snap.data);
+            }
           } else {
             return CircularProgressIndicator();
           }
@@ -243,7 +280,7 @@ class _GamePlayState extends State<GamePlay> {
   }
 
   Widget buildPlayerSubmitContainer(BuildContext context) {
-    if (_isDecider) {
+    if (_isDecider || _isSubmitted) {
       return SizedBox(height: 10);
     } else {
       return Row(
@@ -261,12 +298,15 @@ class _GamePlayState extends State<GamePlay> {
                     borderRadius: BorderRadius.circular(16.0)),
                 child: Text('Clear selection')),
             RaisedButton(
-                onPressed: () {
+                onPressed: () async {
                   debugPrint("Submit responses");
-                  _submitResponse(_responseCardUuidList);
-                  _refreshPlayerHand();
+                  int respCode = await _submitResponse(_responseCardUuidList);
+                  if (respCode != 200) {
+                    debugPrint("Error submitting responses: $respCode");
+                  }
                   setState(() {
                     _responseCardUuidList.clear();
+                    _refreshPlayerHand();
                   });
                 },
                 shape: RoundedRectangleBorder(

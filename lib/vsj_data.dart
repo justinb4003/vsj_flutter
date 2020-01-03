@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 
 class VSGData {
@@ -20,5 +21,12 @@ class VSGData {
     return http.post(fullUrl,
         headers: {HttpHeaders.contentTypeHeader: "application/json"},
         body: body);
+  }
+
+  static Future<int> loadPrefs() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    VSGData.playerName = prefs.getString('playerName') ?? '';
+    debugPrint("loadPrefs() complete.");
+    return 0;
   }
 }
